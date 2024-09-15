@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Bitcoin Price Chart</title>
+</head>
+<body>
+    <h1>Bitcoin Price Chart</h1>
+    <label for="interval">Select Interval:</label>
+    <select id="interval">
+        <option value="4h">4 Hours</option>
+        <option value="1d" selected>1 Day</option>
+    </select>
+    <button id="generateBtn">Generate Chart</button>
+
+    <div id="chartContainer" style="margin-top: 20px;">
+        <!-- The iframe will be inserted here -->
+    </div>
+
+    <script>
+        document.getElementById('generateBtn').addEventListener('click', function() {
+            var interval = document.getElementById('interval').value;
+
+            fetch('/chart?interval=' + interval)
+                .then(response => response.json())
+                .then(data => {
+                    if(data.chart_url) {
+                        var iframe = document.createElement('iframe');
+                        iframe.src = data.chart_url;
+                        iframe.width = '100%';
+                        iframe.height = '600px';
+                        iframe.style.border = 'none';
+                        var container = document.getElementById('chartContainer');
+                        container.innerHTML = ''; // Clear previous chart
+                        container.appendChild(iframe);
+                    } else {
+                        alert('Error generating chart.');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Error generating chart.');
+                });
+        });
+    </script>
+</body>
+</html>
