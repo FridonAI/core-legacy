@@ -1,25 +1,14 @@
 # main.py
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 import pandas as pd
 import numpy as np
-import plotly.graph_objs as go
-import plotly.offline as pyo
 import aiohttp
 import asyncio
-import os
 from datetime import datetime, timedelta
 
 app = FastAPI()
-
-# Ensure the 'static' directory exists
-if not os.path.exists('static'):
-    os.makedirs('static')
-
-# Mount the static directory to serve static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
 async def fetch_data(interval):
     # Map interval to Binance API intervals
@@ -28,7 +17,7 @@ async def fetch_data(interval):
         start_time = int((datetime.utcnow() - timedelta(days=7)).timestamp() * 1000)
     else:  # '1d'
         binance_interval = '1d'
-        start_time = int((datetime.utcnow() - timedelta(days=30)).timestamp() * 1000)
+        start_time = int((datetime.utcnow() - timedelta(days=90)).timestamp() * 1000)
     
     url = f"https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval={binance_interval}&startTime={start_time}"
     
@@ -60,110 +49,63 @@ def calculate_support_resistance(df):
         current_max = df['High'][i]
         current_min = df['Low'][i]
         if current_max == max_price:
-            pivots.append((df['Date'][i], current_max))
+            pivots.append({'Date': df['Date'][i], 'Value': current_max, 'Type': 'Resistance'})
         if current_min == min_price:
-            pivots.append((df['Date'][i], current_min))
-
+            pivots.append({'Date': df['Date'][i], 'Value': current_min, 'Type': 'Support'})
+    
     # Filter significant levels
     levels = []
     for pivot in pivots:
-        level = pivot[1]
-        if any([abs(level - x) < (df['High'].max() - df['Low'].min()) * 0.005 for x in levels]):
+        level = pivot['Value']
+        if any([abs(level - x['Value']) < (df['High'].max() - df['Low'].min()) * 0.005 for x in levels]):
             continue
-        levels.append(level)
+        levels.append(pivot)
     return levels
 
-def create_chart(df, levels, interval):
-    # Create candlestick chart with Plotly
-    candlestick = go.Candlestick(
-        x=df['Date'],
-        open=df['Open'],
-        high=df['High'],
-        low=df['Low'],
-        close=df['Close'],
-        name='Price'
-    )
+def calculate_indicators(df):
+    # Calculate EMA (e.g., 20-period EMA)
+    ema_period = 20
+    df['EMA'] = df['Close'].ewm(span=ema_period, adjust=False).mean()
+    
+    # Calculate VWAP
+    df['Typical Price'] = (df['High'] + df['Low'] + df['Close']) / 3
+    df['TPV'] = df['Typical Price'] * df['Volume']
+    df['Cumulative TPV'] = df['TPV'].cumsum()
+    df['Cumulative Volume'] = df['Volume'].cumsum()
+    df['VWAP'] = df['Cumulative TPV'] / df['Cumulative Volume']
+    
+    # Clean up intermediate columns
+    df.drop(['Typical Price', 'TPV', 'Cumulative TPV', 'Cumulative Volume'], axis=1, inplace=True)
+    
+    return df
 
-    volume = go.Bar(
-        x=df['Date'],
-        y=df['Volume'],
-        name='Volume',
-        yaxis='y2',
-        opacity=0.5
-    )
-
-    data = [candlestick, volume]
-
-    # Add support and resistance lines
-    shapes = []
-    annotations = []
-    for level in levels:
-        shapes.append({
-            'type': 'line',
-            'x0': df['Date'].min(),
-            'y0': level,
-            'x1': df['Date'].max(),
-            'y1': level,
-            'line': {
-                'color': 'green',
-                'width': 1,
-                'dash': 'dash',
-            },
-        })
-        annotations.append({
-            'x': df['Date'].max(),
-            'y': level,
-            'xref': 'x',
-            'yref': 'y',
-            'text': f'{level:.2f}',
-            'showarrow': False,
-            'xanchor': 'left',
-            'yanchor': 'middle',
-            'font': {'color': 'green'},
-        })
-
-    layout = go.Layout(
-        title=f'Bitcoin Price Chart ({interval.upper()})',
-        xaxis=dict(
-            rangeslider=dict(visible=False),
-            title='Date'
-        ),
-        yaxis=dict(
-            title='Price (USD)',
-            domain=[0.3, 1]
-        ),
-        yaxis2=dict(
-            title='Volume',
-            domain=[0, 0.2],
-            anchor='x'
-        ),
-        shapes=shapes,
-        annotations=annotations,
-        legend=dict(orientation='h', x=0, y=1.1),
-        height=600,
-    )
-
-    fig = go.Figure(data=data, layout=layout)
-
-    # Save the chart as an HTML file
-    filename = f"chart_{interval}.html"
-    filepath = os.path.join('static', filename)
-    pyo.plot(fig, filename=filepath, auto_open=False, include_plotlyjs='cdn')
-
-    return filename
-
-@app.get("/chart")
-async def get_chart(interval: str = '1d'):
+@app.get("/chart-data")
+async def get_chart_data(interval: str = '1d'):
     if interval not in ['4h', '1d']:
         return JSONResponse(content={"error": "Invalid interval"}, status_code=400)
 
     df = await fetch_data(interval)
+    df = calculate_indicators(df)
     levels = calculate_support_resistance(df)
-    filename = create_chart(df, levels, interval)
 
-    # Return the URL to the chart
-    url = f"/static/{filename}"
-    return {"chart_url": url}
+    # Convert 'Date' fields in 'levels' to strings
+    for level in levels:
+        level['Date'] = str(level['Date'])
+
+    # Prepare data for Plotly
+    data = {
+        'dates': df['Date'].astype(str).tolist(),
+        'open': df['Open'].tolist(),
+        'high': df['High'].tolist(),
+        'low': df['Low'].tolist(),
+        'close': df['Close'].tolist(),
+        'volume': df['Volume'].tolist(),
+        'ema': df['EMA'].tolist(),
+        'vwap': df['VWAP'].tolist(),
+        'levels': levels
+    }
+
+    return JSONResponse(content=data)
 
 @app.get("/")
 async def read_index():
