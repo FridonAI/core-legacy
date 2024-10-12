@@ -3,23 +3,19 @@
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 import pandas as pd
-import numpy as np
 import aiohttp
-import asyncio
 from datetime import datetime, timedelta
 
 app = FastAPI()
 
-async def fetch_data(interval):
+async def fetch_data(symbol, interval, days=None, limit=1):
     # Map interval to Binance API intervals
-    if interval == '4h':
-        binance_interval = '4h'
-        start_time = int((datetime.utcnow() - timedelta(days=7)).timestamp() * 1000)
-    else:  # '1d'
-        binance_interval = '1d'
-        start_time = int((datetime.utcnow() - timedelta(days=90)).timestamp() * 1000)
-    
-    url = f"https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval={binance_interval}&startTime={start_time}"
+    binance_interval = interval
+    if days is not None:
+        start_time = int((datetime.utcnow() - timedelta(days=days)).timestamp() * 1000)
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={binance_interval}&startTime={start_time}"
+    else:
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={binance_interval}&limit={limit}"
     
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
